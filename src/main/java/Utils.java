@@ -5,7 +5,8 @@ public class Utils {
     // runs arbitrary command; returns the output, or null if failed
     public static String runCommand(String command) {
         try {
-            Process pr = Runtime.getRuntime().exec(command);
+            // the 'sh -c ..' is required to pass runEchoHelloWorld and runMvn tests
+            Process pr = Runtime.getRuntime().exec(new String[] {"sh", "-c", command});
             BufferedReader input = new BufferedReader(new InputStreamReader(
                     pr.getInputStream()));
 

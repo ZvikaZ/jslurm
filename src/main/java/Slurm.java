@@ -10,14 +10,16 @@ public class Slurm {
         INIT,
         SUBMITTED,
         PENDING,
+        RUNNING,
         COMPLETED,
-        FAILED
+        FAILED,
+        CANCELLED
     }
 
     public Status status;
+    public String command;
+    public int jobId;
 
-    private String command;
-    private int jobId;
     private String outputFileName;
 
     public static boolean isSlurmInstalled() {
@@ -29,6 +31,10 @@ public class Slurm {
         this.command = command;
         this.status = Status.INIT;
         this.runJob();
+    }
+
+    public String toString() {
+        return "Slurm. jobID: " + jobId + ", last status: " + status + ". command: " + command;
     }
 
     private static final Pattern submitPattern = Pattern.compile("Submitted batch job (\\d+)");
@@ -51,7 +57,7 @@ public class Slurm {
 
     public void waitFinished() {
         updateStatus();
-        while (status != Status.COMPLETED && status != Status.FAILED) {
+        while (hasntFinished()) {
             try {
                 Thread.sleep(DelayBetweenStatusChecks);
             } catch (InterruptedException e) {
@@ -59,6 +65,12 @@ public class Slurm {
             }
             updateStatus();
         }
+    }
+
+    private boolean hasntFinished() {
+        return status != Status.COMPLETED &&
+                status != Status.FAILED &&
+                status != Status.CANCELLED;
     }
 
     private static final Pattern outputPattern = Pattern.compile(".*StdOut=(.+?) .*");
@@ -83,22 +95,49 @@ public class Slurm {
         return status;
     }
 
-    public String getOutputFIleName() {
+    public String getOutputFileName() {
         return outputFileName;
     }
 
+    public String getOutput() {
+        return Utils.readFileToString(getOutputFileName());
+    }
+
+    private static final Pattern scontrolStatusPattern = Pattern.compile(".*JobState=(.+?) .*");
+
     private void updateStatus() {
-        String result = Utils.runCommand(String.format("sacct -j %d --noheader --brief --parsable2 --delimiter=,", this.jobId));
-        if (result != "") {
-            String state = result.split(",")[1];
+        if (hasntFinished()) {
+            // scontrol has disadvantage that it's only for running, or recently finished
+            // sacct has disadvantage that it doesn't work on some of our machines
+            // .. so, I prefer sacct, and use scontrol as fallback
+            String state = "";
+            String result = null; //Utils.runCommand(String.format("sacct -j %d --noheader --brief --parsable2 --delimiter=,", this.jobId));
+            if (!Objects.equals(result, "") && result != null) {
+                state = result.split(",")[1];
+            }
+            if (result == null) {
+                result = Utils.runCommand("scontrol show job " + this.jobId);
+                Matcher m = scontrolStatusPattern.matcher(result);
+                if (m.find()) {
+                    state = m.group(1);
+                }
+            }
+
             if (Objects.equals(state, "COMPLETED"))
                 status = Status.COMPLETED;
             else if (Objects.equals(state, "FAILED"))
                 status = Status.FAILED;
             else if (Objects.equals(state, "PENDING"))
                 status = Status.PENDING;
+            else if (Objects.equals(state, "RUNNING"))
+                status = Status.RUNNING;
+            else if (Objects.equals(state, "COMPLETING"))
+                // for my needs they are identical
+                status = Status.RUNNING;
+            else if (Objects.equals(state, "CANCELLED"))
+                status = Status.CANCELLED;
             else
-                System.out.println("Unrecognized status: " + state);
+                System.out.println("jslurm: Unrecognized status: " + state);
         }
     }
 }
